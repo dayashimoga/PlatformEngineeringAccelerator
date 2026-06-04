@@ -192,6 +192,35 @@ diagnostics: ## Run cluster status diagnostics and check pod health
 	@bash scripts/diagnostics.sh
 
 # ============================================================================
+# Learning & Mastery (UPEMS)
+# ============================================================================
+
+.PHONY: learn
+learn: ## Launch the interactive learning CLI
+	@echo "$(CYAN)🎓 Starting learning dashboard...$(RESET)"
+	@bash scripts/learn.sh
+
+.PHONY: mentor
+mentor: ## Launch the Q&A tech mentor and interview coach
+	@echo "$(CYAN)🧠 Starting mentor session...$(RESET)"
+	@bash scripts/mentor.sh
+
+.PHONY: labs
+labs: ## List all available sandbox labs
+	@echo "$(GREEN)🎓 UPEMS Available Labs:$(RESET)"
+	@echo "  - labs/01-docker-hardening"
+	@echo "  - labs/02-terraform-vpc"
+	@echo "  - labs/03-k8s-probes"
+	@echo "  - labs/04-argocd-gitops"
+	@echo "  - labs/05-otel-metrics"
+	@echo "  - labs/06-security-policies"
+
+.PHONY: simulations
+simulations: ## Run chaos simulations and outages in local cluster
+	@echo "$(CYAN)💥 Starting simulations dashboard...$(RESET)"
+	@bash scripts/run-simulation.sh
+
+# ============================================================================
 # Clean
 # ============================================================================
 
