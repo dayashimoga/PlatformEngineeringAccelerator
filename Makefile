@@ -148,6 +148,50 @@ security-scan: ## Run all security scans locally
 	@echo "$(GREEN)✅ Security scan complete$(RESET)"
 
 # ============================================================================
+# Local Development & Lifecycle
+# ============================================================================
+
+.PHONY: up start
+up start: ## Spin up local cluster and bootstrap platform
+	@echo "$(CYAN)🚀 Starting local environment...$(RESET)"
+	@bash scripts/start-all.sh
+
+.PHONY: down stop
+down stop: ## Pause or stop local cluster nodes
+	@echo "$(CYAN)🛑 Stopping local environment...$(RESET)"
+	@bash scripts/stop-all.sh
+
+.PHONY: destroy
+destroy: ## Delete local cluster and clean tfstate
+	@echo "$(RED)💥 Destroying local resources...$(RESET)"
+	@bash scripts/destroy-all.sh
+
+.PHONY: reset
+reset: ## Fully reset (destroy and recreate) local environment
+	@echo "$(CYAN)🔄 Resetting local environment...$(RESET)"
+	@bash scripts/reset-all.sh
+
+.PHONY: verify
+verify: ## Run integration, E2E, and policy validation verify checks
+	@echo "$(CYAN)🕵️ Verifying local platform...$(RESET)"
+	@bash scripts/verify-all.sh
+
+.PHONY: backup
+backup: ## Create a snapshot backup of current configuration state
+	@echo "$(CYAN)📦 Creating backup...$(RESET)"
+	@bash scripts/backup-data.sh
+
+.PHONY: restore
+restore: ## Restore configuration state (usage: make restore DIR=path/to/backup)
+	@echo "$(CYAN)🔄 Restoring backup from $(DIR)...$(RESET)"
+	@bash scripts/restore-data.sh -d $(DIR)
+
+.PHONY: diagnostics
+diagnostics: ## Run cluster status diagnostics and check pod health
+	@echo "$(CYAN)🔍 Running diagnostics...$(RESET)"
+	@bash scripts/diagnostics.sh
+
+# ============================================================================
 # Clean
 # ============================================================================
 
