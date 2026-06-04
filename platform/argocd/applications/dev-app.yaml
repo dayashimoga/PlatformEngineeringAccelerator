@@ -1,0 +1,25 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: platform-service-dev
+  namespace: argocd
+  labels:
+    environment: dev
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/YOUR_ORG/platform-engineering-accelerator.git
+    targetRevision: HEAD
+    path: platform/kubernetes/helm
+    helm:
+      valueFiles:
+        - values-dev.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dev
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=true

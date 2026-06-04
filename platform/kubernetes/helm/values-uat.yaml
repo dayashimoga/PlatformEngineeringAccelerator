@@ -1,0 +1,25 @@
+# UAT environment overrides
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+ingress:
+  hosts:
+    - host: app.uat.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: app-uat-tls
+      hosts:
+        - app.uat.example.com
+
+config:
+  LOG_LEVEL: "Information"
+  OTEL_TRACES_SAMPLER_ARG: "0.25"

@@ -1,0 +1,157 @@
+name: "Security Scan"
+description: "Run comprehensive security scanning (CodeQL, Trivy, Checkov, Grype, Syft)"
+
+inputs:
+  scan-type:
+    description: "Type of scan: all, code, dependencies, iac, container"
+    required: false
+    default: "all"
+  working-directory:
+    description: "Working directory for scanning"
+    required: false
+    default: "."
+  severity-threshold:
+    description: "Minimum severity to report (UNKNOWN, LOW, MEDIUM, HIGH, CRITICAL)"
+    required: false
+    default: "HIGH"
+  fail-on-severity:
+    description: "Fail on this severity or higher"
+    required: false
+    default: "CRITICAL"
+  upload-reports:
+    description: "Upload scan reports as artifacts"
+    required: false
+    default: "true"
+  terraform-directory:
+    description: "Terraform directory for IaC scanning"
+    required: false
+    default: "platform/terraform"
+  image-ref:
+    description: "Container image reference for container scanning"
+    required: false
+    default: ""
+
+outputs:
+  trivy-report:
+    description: "Path to Trivy report"
+    value: ${{ steps.trivy-fs.outputs.report-path }}
+  checkov-report:
+    description: "Path to Checkov report"
+    value: ${{ steps.checkov.outputs.report-path }}
+  grype-report:
+    description: "Path to Grype report"
+    value: ${{ steps.grype.outputs.report-path }}
+  sbom-path:
+    description: "Path to SBOM output"
+    value: ${{ steps.syft.outputs.sbom-path }}
+
+runs:
+  using: "composite"
+  steps:
+    - name: Create reports directory
+      shell: bash
+      run: mkdir -p scan-results
+
+    - name: Trivy filesystem scan
+      if: inputs.scan-type == 'all' || inputs.scan-type == 'code' || inputs.scan-type == 'dependencies'
+      id: trivy-fs
+      shell: bash
+      run: |
+        trivy fs \
+          --severity ${{ inputs.severity-threshold }},CRITICAL \
+          --format sarif \
+          --output scan-results/trivy-fs-report.sarif \
+          ${{ inputs.working-directory }}
+
+        trivy fs \
+          --severity ${{ inputs.severity-threshold }},CRITICAL \
+          --format json \
+          --output scan-results/trivy-fs-report.json \
+          ${{ inputs.working-directory }}
+
+        trivy fs \
+          --severity ${{ inputs.severity-threshold }},CRITICAL \
+          --format table \
+          ${{ inputs.working-directory }}
+
+        echo "report-path=scan-results/trivy-fs-report.sarif" >> "$GITHUB_OUTPUT"
+
+    - name: Trivy container scan
+      if: (inputs.scan-type == 'all' || inputs.scan-type == 'container') && inputs.image-ref != ''
+      shell: bash
+      run: |
+        trivy image \
+          --severity ${{ inputs.severity-threshold }},CRITICAL \
+          --format sarif \
+          --output scan-results/trivy-image-report.sarif \
+          ${{ inputs.image-ref }}
+
+        trivy image \
+          --severity ${{ inputs.severity-threshold }},CRITICAL \
+          --format json \
+          --output scan-results/trivy-image-report.json \
+          ${{ inputs.image-ref }}
+
+    - name: Checkov IaC scan
+      if: inputs.scan-type == 'all' || inputs.scan-type == 'iac'
+      id: checkov
+      shell: bash
+      run: |
+        pip install checkov --quiet 2>/dev/null || true
+        checkov \
+          -d ${{ inputs.terraform-directory }} \
+          --output json \
+          --output-file-path scan-results/ \
+          --soft-fail || true
+
+        checkov \
+          -d ${{ inputs.terraform-directory }} \
+          --output sarif \
+          --output-file-path scan-results/ \
+          --soft-fail || true
+
+        echo "report-path=scan-results/results_sarif.sarif" >> "$GITHUB_OUTPUT"
+
+    - name: Grype dependency scan
+      if: inputs.scan-type == 'all' || inputs.scan-type == 'dependencies'
+      id: grype
+      shell: bash
+      run: |
+        curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
+        grype dir:${{ inputs.working-directory }} \
+          --output json \
+          --file scan-results/grype-report.json \
+          --fail-on ${{ inputs.fail-on-severity }} || true
+
+        grype dir:${{ inputs.working-directory }} \
+          --output sarif \
+          --file scan-results/grype-report.sarif || true
+
+        echo "report-path=scan-results/grype-report.sarif" >> "$GITHUB_OUTPUT"
+
+    - name: Generate SBOM with Syft
+      if: inputs.scan-type == 'all' || inputs.scan-type == 'code'
+      id: syft
+      shell: bash
+      run: |
+        curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+        syft dir:${{ inputs.working-directory }} \
+          -o spdx-json=scan-results/sbom.spdx.json \
+          -o cyclonedx-json=scan-results/sbom.cdx.json
+
+        echo "sbom-path=scan-results/sbom.spdx.json" >> "$GITHUB_OUTPUT"
+
+    - name: Upload scan reports
+      if: inputs.upload-reports == 'true' && always()
+      uses: actions/upload-artifact@c7d193f32edcb7bfad88892161225aeda64e9392 # v4.0.0
+      with:
+        name: security-scan-reports
+        path: scan-results/
+        retention-days: 30
+
+    - name: Upload SARIF to GitHub Security
+      if: inputs.upload-reports == 'true' && always()
+      uses: github/codeql-action/upload-sarif@1b1aada464948af03b950897e5eb522f92603cc2 # v3.24.0
+      with:
+        sarif_file: scan-results/
+      continue-on-error: true

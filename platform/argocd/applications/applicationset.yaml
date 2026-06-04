@@ -1,0 +1,88 @@
+# =============================================================================
+# Argo CD ApplicationSet — Multi-Environment Deployment
+# =============================================================================
+# Automatically generates Application CRs for each environment.
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: platform-services
+  namespace: argocd
+spec:
+  generators:
+    - matrix:
+        generators:
+          - git:
+              repoURL: https://github.com/YOUR_ORG/platform-engineering-accelerator.git
+              revision: HEAD
+              directories:
+                - path: "platform/kubernetes/helm"
+          - list:
+              elements:
+                - environment: dev
+                  namespace: dev
+                  cluster: in-cluster
+                  autoSync: "true"
+                  selfHeal: "true"
+                  prune: "true"
+                  valuesFile: values-dev.yaml
+                - environment: qa
+                  namespace: qa
+                  cluster: in-cluster
+                  autoSync: "true"
+                  selfHeal: "true"
+                  prune: "true"
+                  valuesFile: values-qa.yaml
+                - environment: uat
+                  namespace: uat
+                  cluster: in-cluster
+                  autoSync: "true"
+                  selfHeal: "false"
+                  prune: "false"
+                  valuesFile: values-uat.yaml
+                - environment: prod
+                  namespace: prod
+                  cluster: in-cluster
+                  autoSync: "false"
+                  selfHeal: "true"
+                  prune: "false"
+                  valuesFile: values-prod.yaml
+
+  template:
+    metadata:
+      name: "{{path.basename}}-{{environment}}"
+      namespace: argocd
+      labels:
+        app.kubernetes.io/managed-by: argocd
+        environment: "{{environment}}"
+      annotations:
+        notifications.argoproj.io/subscribe.on-sync-succeeded.slack: platform-deployments
+        notifications.argoproj.io/subscribe.on-sync-failed.slack: platform-alerts
+    spec:
+      project: platform
+      source:
+        repoURL: https://github.com/YOUR_ORG/platform-engineering-accelerator.git
+        targetRevision: HEAD
+        path: "{{path}}"
+        helm:
+          valueFiles:
+            - "{{valuesFile}}"
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: "{{namespace}}"
+      syncPolicy:
+        automated:
+          selfHeal: true
+          prune: true
+        syncOptions:
+          - CreateNamespace=true
+          - PruneLast=true
+          - ApplyOutOfSyncOnly=true
+          - ServerSideApply=true
+        retry:
+          limit: 3
+          backoff:
+            duration: 5s
+            factor: 2
+            maxDuration: 3m
+      revisionHistoryLimit: 10

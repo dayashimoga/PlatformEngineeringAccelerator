@@ -1,0 +1,28 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: argocd-cm
+  namespace: argocd
+  labels:
+    app.kubernetes.io/part-of: argocd
+data:
+  # Enable resource tracking via annotation (standard, safe)
+  application.resourceTrackingMethod: annotation
+  
+  # Configure git commit verification
+  gpg.keys: |
+    # Add verified public keys here
+    
+  # Enable self-healing timeout configs
+  timeout.reconciliation: 180s
+  
+  # Admin signature / banner config
+  admin.enabled: "true"
+  
+  # Standard resource exclusion for telemetry/metrics
+  resource.exclusions: |
+    - apiGroups:
+      - metrics.k8s.io
+      kinds:
+      - PodMetrics
+      - NodeMetrics

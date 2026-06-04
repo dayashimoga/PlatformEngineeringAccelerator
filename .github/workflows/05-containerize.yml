@@ -1,0 +1,233 @@
+# =============================================================================
+# 05-containerize.yml — Reusable Containerize Workflow
+# =============================================================================
+# Build OCI-compliant multi-stage images, scan, sign, generate SBOM.
+# =============================================================================
+
+name: "05 — Containerize"
+
+on:
+  workflow_call:
+    inputs:
+      registry:
+        description: "Container registry (ghcr.io, ACR, ECR, GCR)"
+        type: string
+        required: false
+        default: "ghcr.io"
+      image-name:
+        description: "Image name (e.g., org/service-name)"
+        type: string
+        required: true
+      dockerfile:
+        description: "Path to Dockerfile"
+        type: string
+        required: false
+        default: "Dockerfile"
+      context:
+        description: "Docker build context"
+        type: string
+        required: false
+        default: "."
+      version:
+        description: "Semantic version for tagging"
+        type: string
+        required: true
+      platforms:
+        description: "Target platforms"
+        type: string
+        required: false
+        default: "linux/amd64"
+      build-args:
+        description: "Build arguments"
+        type: string
+        required: false
+        default: ""
+      scan-image:
+        description: "Scan image for vulnerabilities"
+        type: boolean
+        required: false
+        default: true
+      sign-image:
+        description: "Sign image with Cosign"
+        type: boolean
+        required: false
+        default: true
+      generate-sbom:
+        description: "Generate SBOM"
+        type: boolean
+        required: false
+        default: true
+      fail-on-critical:
+        description: "Fail on critical vulnerabilities"
+        type: boolean
+        required: false
+        default: true
+    outputs:
+      image-digest:
+        description: "Image digest"
+        value: ${{ jobs.containerize.outputs.digest }}
+      image-uri:
+        description: "Full image URI"
+        value: ${{ jobs.containerize.outputs.image-uri }}
+      image-tags:
+        description: "All image tags"
+        value: ${{ jobs.containerize.outputs.tags }}
+    secrets:
+      REGISTRY_USERNAME:
+        required: false
+      REGISTRY_PASSWORD:
+        required: false
+
+permissions:
+  contents: read
+  packages: write
+  id-token: write
+
+jobs:
+  containerize:
+    name: "Build & Push Container"
+    runs-on: ubuntu-latest
+    outputs:
+      digest: ${{ steps.build.outputs.digest }}
+      image-uri: "${{ inputs.registry }}/${{ inputs.image-name }}:${{ inputs.version }}"
+      tags: ${{ steps.meta.outputs.tags }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@68827325e0b33c7199eb31dd4e31fbe9023e06e3 # v3.0.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 # v3.0.0
+
+      - name: Login to GHCR
+        if: inputs.registry == 'ghcr.io'
+        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d # v3.0.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN || secrets.REGISTRY_PASSWORD }}
+
+      - name: Login to ACR
+        if: contains(inputs.registry, 'azurecr.io')
+        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d # v3.0.0
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Login to ECR
+        if: contains(inputs.registry, 'amazonaws.com')
+        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d # v3.0.0
+        with:
+          registry: ${{ inputs.registry }}
+          username: ${{ secrets.REGISTRY_USERNAME }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Login to GCR
+        if: contains(inputs.registry, 'gcr.io') && !startsWith(inputs.registry, 'ghcr.io')
+        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d # v3.0.0
+        with:
+          registry: ${{ inputs.registry }}
+          username: _json_key
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934 # v5.0.0
+        with:
+          images: ${{ inputs.registry }}/${{ inputs.image-name }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ inputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
+            type=sha,prefix=sha-,format=short
+            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+      - name: Build and push
+        id: build
+        uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56 # v5.1.0
+        with:
+          context: ${{ inputs.context }}
+          file: ${{ inputs.dockerfile }}
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: |
+            ${{ steps.meta.outputs.labels }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
+            org.opencontainers.image.revision=${{ github.sha }}
+          build-args: ${{ inputs.build-args }}
+          platforms: ${{ inputs.platforms }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: true
+
+      - name: Install Cosign
+        if: inputs.sign-image
+        uses: sigstore/cosign-installer@dc72c7d5c4d10cd6bcb8cf6e3fd625a9e5e537da # v3.7.0
+
+      - name: Sign image
+        if: inputs.sign-image
+        env:
+          COSIGN_EXPERIMENTAL: "1"
+        run: |
+          cosign sign --yes \
+            "${{ inputs.registry }}/${{ inputs.image-name }}@${{ steps.build.outputs.digest }}"
+
+      - name: Install Trivy
+        if: inputs.scan-image
+        run: |
+          curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+
+      - name: Scan image
+        if: inputs.scan-image
+        run: |
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --format sarif \
+            --output trivy-container-report.sarif \
+            "${{ inputs.registry }}/${{ inputs.image-name }}:${{ inputs.version }}"
+
+          trivy image \
+            --severity HIGH,CRITICAL \
+            --format table \
+            "${{ inputs.registry }}/${{ inputs.image-name }}:${{ inputs.version }}"
+
+          if [ "${{ inputs.fail-on-critical }}" = "true" ]; then
+            trivy image \
+              --severity CRITICAL \
+              --exit-code 1 \
+              "${{ inputs.registry }}/${{ inputs.image-name }}:${{ inputs.version }}"
+          fi
+
+      - name: Generate SBOM
+        if: inputs.generate-sbom
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+          syft "${{ inputs.registry }}/${{ inputs.image-name }}:${{ inputs.version }}" \
+            -o spdx-json=container-sbom.spdx.json \
+            -o cyclonedx-json=container-sbom.cdx.json
+
+      - name: Upload scan reports
+        uses: actions/upload-artifact@c7d193f32edcb7bfad88892161225aeda64e9392 # v4.0.0
+        with:
+          name: container-scan-reports
+          path: |
+            trivy-container-report.sarif
+            container-sbom.spdx.json
+            container-sbom.cdx.json
+          retention-days: 30
+        if: always()
+
+      - name: Container summary
+        run: |
+          echo "## 🐳 Container Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | \`${{ inputs.registry }}/${{ inputs.image-name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Version** | \`${{ inputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Digest** | \`${{ steps.build.outputs.digest }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Signed** | ${{ inputs.sign-image && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Scanned** | ${{ inputs.scan-image && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **SBOM** | ${{ inputs.generate-sbom && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY

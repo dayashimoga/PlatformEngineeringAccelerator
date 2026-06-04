@@ -1,0 +1,25 @@
+# QA environment overrides
+replicaCount: 2
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 512Mi
+
+ingress:
+  hosts:
+    - host: app.qa.example.com
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: app-qa-tls
+      hosts:
+        - app.qa.example.com
+
+config:
+  LOG_LEVEL: "Information"
+  OTEL_TRACES_SAMPLER_ARG: "0.5"

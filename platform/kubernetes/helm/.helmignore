@@ -1,0 +1,17 @@
+# Patterns to ignore when building packages.
+# This supports shell-style wildcards.
+#
+.DS_Store
+# Common VCS dirs
+.git/
+.gitignore
+.gitmodules
+.gitattributes
+# Common backup files
+*.swp
+*.bak
+*~
+# Helm templates
+templates/.ipynb_checkpoints/
+# Test/development files
+tests/

@@ -1,0 +1,66 @@
+# =============================================================================
+# Security Scanner Configurations
+# =============================================================================
+
+# Trivy configuration
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: trivy-config
+  namespace: security
+data:
+  trivy.yaml: |
+    severity:
+      - HIGH
+      - CRITICAL
+    ignore-unfixed: true
+    format: json
+    timeout: 10m
+    skip-dirs:
+      - node_modules
+      - vendor
+      - .terraform
+    security-checks:
+      - vuln
+      - config
+      - secret
+
+# Checkov configuration
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: checkov-config
+  namespace: security
+data:
+  .checkov.yaml: |
+    compact: true
+    directory:
+      - platform/terraform
+    framework:
+      - terraform
+      - kubernetes
+    soft-fail: false
+    skip-check:
+      - CKV_AZURE_35  # Storage account network rules
+    download-external-modules: true
+
+# CodeQL configuration
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: codeql-config
+  namespace: security
+data:
+  codeql-config.yml: |
+    name: "Platform Security Analysis"
+    queries:
+      - uses: security-extended
+      - uses: security-and-quality
+    paths-ignore:
+      - "**/*.test.*"
+      - "**/test/**"
+      - "**/vendor/**"
+      - "**/node_modules/**"

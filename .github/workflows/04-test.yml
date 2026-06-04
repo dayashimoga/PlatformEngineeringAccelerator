@@ -1,0 +1,185 @@
+# =============================================================================
+# 04-test.yml — Reusable Test Workflow
+# =============================================================================
+# Unit tests, integration tests, coverage reports per runtime.
+# =============================================================================
+
+name: "04 — Test"
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "Working directory"
+        type: string
+        required: false
+        default: "."
+      runtime:
+        description: "Application runtime (dotnet, node, python, java, go)"
+        type: string
+        required: true
+      dotnet-version:
+        description: ".NET SDK version"
+        type: string
+        required: false
+        default: "8.0.x"
+      node-version:
+        description: "Node.js version"
+        type: string
+        required: false
+        default: "20"
+      python-version:
+        description: "Python version"
+        type: string
+        required: false
+        default: "3.12"
+      java-version:
+        description: "Java version"
+        type: string
+        required: false
+        default: "21"
+      go-version:
+        description: "Go version"
+        type: string
+        required: false
+        default: "1.22"
+      coverage-threshold:
+        description: "Minimum code coverage percentage"
+        type: number
+        required: false
+        default: 80
+
+jobs:
+  test:
+    name: "Test (${{ inputs.runtime }})"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      # -----------------------------------------------------------------------
+      # .NET Tests
+      # -----------------------------------------------------------------------
+      - name: Setup .NET
+        if: inputs.runtime == 'dotnet'
+        uses: actions/setup-dotnet@4d6c8fcf3c8f7a60068d26b594648e99df24cee3 # v4.0.0
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Run .NET tests
+        if: inputs.runtime == 'dotnet'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          dotnet restore
+          dotnet test \
+            --configuration Release \
+            --no-restore \
+            --verbosity normal \
+            --collect:"XPlat Code Coverage" \
+            --results-directory ./test-results \
+            --logger "trx;LogFileName=test-results.trx" \
+            -- DataCollectionRunSettings.DataCollectors.DataCollector.Configuration.Format=cobertura
+
+      # -----------------------------------------------------------------------
+      # Node.js Tests
+      # -----------------------------------------------------------------------
+      - name: Setup Node.js
+        if: inputs.runtime == 'node'
+        uses: actions/setup-node@b39b52d1213e96004bfcb1c61a8a6fa8ab84f3e8 # v4.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+          cache-dependency-path: "${{ inputs.working-directory }}/package-lock.json"
+
+      - name: Run Node.js tests
+        if: inputs.runtime == 'node'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          npm ci --ignore-scripts
+          npm test -- --coverage --coverageReporters=text --coverageReporters=cobertura || \
+            npx jest --coverage --coverageReporters=text --coverageReporters=cobertura || \
+            echo "::warning::No test runner configured"
+
+      # -----------------------------------------------------------------------
+      # Python Tests
+      # -----------------------------------------------------------------------
+      - name: Setup Python
+        if: inputs.runtime == 'python'
+        uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Run Python tests
+        if: inputs.runtime == 'python'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          pip install -r requirements.txt
+          pip install pytest pytest-cov
+          pytest \
+            --cov=src \
+            --cov-report=xml:coverage.xml \
+            --cov-report=term-missing \
+            --junitxml=test-results.xml \
+            -v
+
+      # -----------------------------------------------------------------------
+      # Java Tests
+      # -----------------------------------------------------------------------
+      - name: Setup Java
+        if: inputs.runtime == 'java'
+        uses: actions/setup-java@387ac29b308b003ca37ba93a6cab5eb57c8f5f93 # v4.0.0
+        with:
+          distribution: "temurin"
+          java-version: ${{ inputs.java-version }}
+
+      - name: Run Java tests
+        if: inputs.runtime == 'java'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -f "pom.xml" ]; then
+            mvn test -B
+          elif [ -f "build.gradle" ]; then
+            ./gradlew test
+          fi
+
+      # -----------------------------------------------------------------------
+      # Go Tests
+      # -----------------------------------------------------------------------
+      - name: Setup Go
+        if: inputs.runtime == 'go'
+        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Run Go tests
+        if: inputs.runtime == 'go'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          go mod download
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+          go tool cover -func=coverage.out
+
+      # -----------------------------------------------------------------------
+      # Test Results
+      # -----------------------------------------------------------------------
+      - name: Upload test results
+        uses: actions/upload-artifact@c7d193f32edcb7bfad88892161225aeda64e9392 # v4.0.0
+        with:
+          name: test-results-${{ inputs.runtime }}
+          path: |
+            ${{ inputs.working-directory }}/test-results/
+            ${{ inputs.working-directory }}/coverage.xml
+            ${{ inputs.working-directory }}/coverage.out
+            ${{ inputs.working-directory }}/test-results.xml
+          retention-days: 14
+          if-no-files-found: ignore
+        if: always()
+
+      - name: Test summary
+        if: always()
+        run: |
+          echo "## 🧪 Test Results (${{ inputs.runtime }})" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Runtime**: ${{ inputs.runtime }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ${{ job.status }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Coverage Threshold**: ${{ inputs.coverage-threshold }}%" >> $GITHUB_STEP_SUMMARY

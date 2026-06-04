@@ -1,0 +1,29 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: worker-service
+  description: ".NET 8 Background Worker Service with OpenTelemetry instrumentation"
+  annotations:
+    github.com/project-slug: YOUR_ORG/worker-service
+    backstage.io/techdocs-ref: dir:.
+    argocd/app-name: worker-service
+    grafana/dashboard-selector: "app=worker-service"
+    prometheus.io/rule: worker-service
+  tags:
+    - dotnet
+    - worker
+    - platform-accelerator
+  links:
+    - url: https://github.com/YOUR_ORG/worker-service
+      title: GitHub Repository
+      icon: github
+    - url: https://grafana.internal/d/platform-infra-dashboard?var-service=worker-service
+      title: Grafana Infrastructure Dashboard
+      icon: dashboard
+spec:
+  type: service
+  lifecycle: production
+  owner: group:platform-engineering
+  system: platform
+  dependsOn:
+    - resource:default/otel-collector

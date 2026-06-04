@@ -1,0 +1,32 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: node-api
+  description: "Node.js Express API service with OpenTelemetry instrumentation"
+  annotations:
+    github.com/project-slug: YOUR_ORG/node-api
+    backstage.io/techdocs-ref: dir:.
+    argocd/app-name: node-api
+    grafana/dashboard-selector: "app=node-api"
+    prometheus.io/rule: node-api
+  tags:
+    - nodejs
+    - express
+    - api
+    - platform-accelerator
+  links:
+    - url: https://github.com/YOUR_ORG/node-api
+      title: GitHub Repository
+      icon: github
+    - url: https://grafana.internal/d/platform-app-dashboard?var-service=node-api
+      title: Grafana Dashboard
+      icon: dashboard
+spec:
+  type: service
+  lifecycle: production
+  owner: group:platform-engineering
+  system: platform
+  providesApis:
+    - node-api-api
+  dependsOn:
+    - resource:default/otel-collector

@@ -1,0 +1,8 @@
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: platform
+  description: "Core Platform Engineering Accelerator system"
+spec:
+  owner: group:platform-engineering
+  domain: platform-services

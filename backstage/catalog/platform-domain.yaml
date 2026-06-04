@@ -1,0 +1,7 @@
+apiVersion: backstage.io/v1alpha1
+kind: Domain
+metadata:
+  name: platform-services
+  description: "Domain encompassing all services provisioned by the platform engineering accelerator"
+spec:
+  owner: group:platform-engineering

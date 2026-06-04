@@ -1,0 +1,73 @@
+apiVersion: scaffolder.backstage.io/v1beta3
+kind: Template
+metadata:
+  name: react-app-template
+  title: React Frontend Template
+  description: Create a production-ready React SPA hosted on Nginx with GitOps pipeline.
+spec:
+  owner: platform-engineering
+  type: website
+
+  parameters:
+    - title: Provide service details
+      required:
+        - name
+        - owner
+      properties:
+        name:
+          title: Service Name
+          type: string
+          description: Unique name of the web app
+          ui:autofocus: true
+        owner:
+          title: Owner
+          type: string
+          description: Owner team of this web app
+          ui:field: OwnerPicker
+          ui:options:
+            allowedKinds:
+              - Group
+
+    - title: Choose location
+      required:
+        - repoUrl
+      properties:
+        repoUrl:
+          title: Repository Location
+          type: string
+          ui:field: RepoUrlPicker
+          ui:options:
+            allowedHosts:
+              - github.com
+
+  steps:
+    - id: fetch-base
+      name: Fetch Base Template
+      action: fetch:template
+      input:
+        url: ../../golden-templates/react-app
+        values:
+          serviceName: ${{ parameters.name }}
+          owner: ${{ parameters.owner }}
+
+    - id: publish
+      name: Publish Repository
+      action: publish:github
+      input:
+        allowedHosts: ['github.com']
+        description: 'Bootstrapped from Backstage React Template'
+        repoUrl: ${{ parameters.repoUrl }}
+
+    - id: register
+      name: Register Component
+      action: catalog:register
+      input:
+        repoContentsUrl: ${{ steps['publish'].output.repoContentsUrl }}
+        catalogInfoPath: '/catalog-info.yaml'
+
+  output:
+    links:
+      - title: Repository
+        url: ${{ steps['publish'].output.remoteUrl }}
+      - title: Catalog Link
+        url: ${{ steps['register'].output.catalogInfoUrl }}

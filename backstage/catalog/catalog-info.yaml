@@ -1,0 +1,10 @@
+apiVersion: backstage.io/v1alpha1
+kind: Location
+metadata:
+  name: platform-catalog-root
+  description: "Root location for all platform-level catalog resources"
+spec:
+  targets:
+    - ./platform-system.yaml
+    - ./platform-domain.yaml
+    - ./platform-group.yaml

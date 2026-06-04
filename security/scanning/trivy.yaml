@@ -1,0 +1,14 @@
+severity:
+  - HIGH
+  - CRITICAL
+ignore-unfixed: true
+format: table
+timeout: 10m
+skip-dirs:
+  - node_modules
+  - vendor
+  - .terraform
+security-checks:
+  - vuln
+  - config
+  - secret

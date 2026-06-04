@@ -1,0 +1,128 @@
+name: "Docker Build & Push"
+description: "Build, tag, scan, sign, and push OCI-compliant container images"
+
+inputs:
+  registry:
+    description: "Container registry (ghcr.io, *.azurecr.io, *.dkr.ecr.*.amazonaws.com, gcr.io)"
+    required: true
+    default: "ghcr.io"
+  image-name:
+    description: "Full image name (e.g., org/app)"
+    required: true
+  dockerfile:
+    description: "Path to Dockerfile"
+    required: false
+    default: "Dockerfile"
+  context:
+    description: "Docker build context"
+    required: false
+    default: "."
+  build-args:
+    description: "Docker build arguments (newline-separated KEY=VALUE)"
+    required: false
+    default: ""
+  version:
+    description: "Semantic version tag"
+    required: true
+  push:
+    description: "Push image to registry"
+    required: false
+    default: "true"
+  sign:
+    description: "Sign image with Cosign"
+    required: false
+    default: "true"
+  scan:
+    description: "Scan image with Trivy"
+    required: false
+    default: "true"
+  sbom:
+    description: "Generate SBOM with Syft"
+    required: false
+    default: "true"
+  platforms:
+    description: "Target platforms for multi-arch builds"
+    required: false
+    default: "linux/amd64"
+
+outputs:
+  image-digest:
+    description: "Image digest"
+    value: ${{ steps.build.outputs.digest }}
+  image-uri:
+    description: "Full image URI with tag"
+    value: "${{ inputs.registry }}/${{ inputs.image-name }}:${{ inputs.version }}"
+
+runs:
+  using: "composite"
+  steps:
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 # v3.0.0
+
+    - name: Extract metadata
+      id: meta
+      uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934 # v5.0.0
+      with:
+        images: ${{ inputs.registry }}/${{ inputs.image-name }}
+        tags: |
+          type=semver,pattern={{version}},value=${{ inputs.version }}
+          type=sha,prefix=sha-,format=short
+          type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
+
+    - name: Build image
+      id: build
+      uses: docker/build-push-action@4a13e500e55cf31b7a5d59a38ab2040ab0f42f56 # v5.1.0
+      with:
+        context: ${{ inputs.context }}
+        file: ${{ inputs.dockerfile }}
+        push: ${{ inputs.push }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        build-args: ${{ inputs.build-args }}
+        platforms: ${{ inputs.platforms }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+        provenance: true
+        sbom: ${{ inputs.sbom }}
+
+    - name: Scan image with Trivy
+      if: inputs.scan == 'true'
+      shell: bash
+      run: |
+        trivy image \
+          --severity HIGH,CRITICAL \
+          --format sarif \
+          --output trivy-image-report.sarif \
+          "${{ inputs.registry }}/${{ inputs.image-name }}:${{ inputs.version }}" || true
+
+        trivy image \
+          --severity HIGH,CRITICAL \
+          --format table \
+          "${{ inputs.registry }}/${{ inputs.image-name }}:${{ inputs.version }}"
+
+    - name: Generate SBOM with Syft
+      if: inputs.sbom == 'true'
+      shell: bash
+      run: |
+        curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+        syft "${{ inputs.registry }}/${{ inputs.image-name }}:${{ inputs.version }}" \
+          -o spdx-json=sbom-${{ inputs.image-name }}.spdx.json \
+          -o cyclonedx-json=sbom-${{ inputs.image-name }}.cdx.json
+
+    - name: Sign image with Cosign
+      if: inputs.sign == 'true' && inputs.push == 'true'
+      shell: bash
+      env:
+        COSIGN_EXPERIMENTAL: "1"
+      run: |
+        cosign sign --yes \
+          "${{ inputs.registry }}/${{ inputs.image-name }}@${{ steps.build.outputs.digest }}"
+
+    - name: Verify image signature
+      if: inputs.sign == 'true' && inputs.push == 'true'
+      shell: bash
+      env:
+        COSIGN_EXPERIMENTAL: "1"
+      run: |
+        cosign verify \
+          "${{ inputs.registry }}/${{ inputs.image-name }}@${{ steps.build.outputs.digest }}" || true

@@ -1,0 +1,77 @@
+name: "Service CI/CD Pipeline"
+
+on:
+  push:
+    branches: [main, release/*]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: write
+  packages: write
+  security-events: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  validate:
+    uses: YOUR_ORG/platform-engineering-accelerator/.github/workflows/01-validate.yml@main
+    with:
+      runtime: node
+      helm-chart-path: "helm"
+      policy-directory: "otel"
+
+  security:
+    uses: YOUR_ORG/platform-engineering-accelerator/.github/workflows/02-security.yml@main
+    with:
+      runtime: node
+
+  build:
+    needs: [validate]
+    uses: YOUR_ORG/platform-engineering-accelerator/.github/workflows/03-build.yml@main
+    with:
+      runtime: node
+
+  test:
+    needs: [build]
+    uses: YOUR_ORG/platform-engineering-accelerator/.github/workflows/04-test.yml@main
+    with:
+      runtime: node
+
+  containerize:
+    needs: [test, security]
+    if: github.event_name == 'push'
+    uses: YOUR_ORG/platform-engineering-accelerator/.github/workflows/05-containerize.yml@main
+    with:
+      registry: ghcr.io
+      image-name: "${{ github.repository_owner }}/${{ github.event.repository.name }}"
+      version: "${{ format('1.0.0-{0}', github.run_number) }}"
+
+  publish:
+    needs: [containerize]
+    uses: YOUR_ORG/platform-engineering-accelerator/.github/workflows/06-publish.yml@main
+    with:
+      registry: ghcr.io
+      image-name: "${{ github.repository_owner }}/${{ github.event.repository.name }}"
+      image-digest: ${{ needs.containerize.outputs.image-digest }}
+      version: "${{ format('1.0.0-{0}', github.run_number) }}"
+
+  gitops-dev:
+    needs: [publish]
+    if: github.ref == 'refs/heads/main'
+    uses: YOUR_ORG/platform-engineering-accelerator/.github/workflows/07-gitops-update.yml@main
+    with:
+      environment: dev
+      image-uri: "${{ needs.containerize.outputs.image-uri }}"
+      image-tag: "${{ format('1.0.0-{0}', github.run_number) }}"
+      service-name: "${{ github.event.repository.name }}"
+      auto-merge: true
+
+  backstage-sync:
+    needs: [gitops-dev]
+    if: github.ref == 'refs/heads/main'
+    uses: YOUR_ORG/platform-engineering-accelerator/.github/workflows/09-backstage-sync.yml@main
+    with:
+      service-name: "${{ github.event.repository.name }}"
+      owner: "platform-engineering"
+      lifecycle: "production"

@@ -1,0 +1,149 @@
+# =============================================================================
+# 08-release.yml — Reusable Release Workflow
+# =============================================================================
+# Semantic versioning, changelog generation, GitHub Release creation.
+# =============================================================================
+
+name: "08 — Release"
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Release version (semver)"
+        type: string
+        required: true
+      service-name:
+        description: "Service name"
+        type: string
+        required: false
+        default: ""
+      prerelease:
+        description: "Mark as prerelease"
+        type: boolean
+        required: false
+        default: false
+      generate-changelog:
+        description: "Auto-generate changelog from conventional commits"
+        type: boolean
+        required: false
+        default: true
+      attach-artifacts:
+        description: "Attach build artifacts to release"
+        type: boolean
+        required: false
+        default: true
+    outputs:
+      release-id:
+        description: "GitHub Release ID"
+        value: ${{ jobs.release.outputs.release-id }}
+      release-url:
+        description: "GitHub Release URL"
+        value: ${{ jobs.release.outputs.release-url }}
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: "Create Release"
+    runs-on: ubuntu-latest
+    outputs:
+      release-id: ${{ steps.create-release.outputs.id }}
+      release-url: ${{ steps.create-release.outputs.html_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          fetch-depth: 0
+
+      - name: Generate changelog
+        id: changelog
+        if: inputs.generate-changelog
+        run: |
+          echo "## What's Changed" > CHANGELOG_BODY.md
+          echo "" >> CHANGELOG_BODY.md
+
+          # Get commits since last tag
+          LAST_TAG=$(git describe --tags --abbrev=0 2>/dev/null || echo "")
+          if [ -n "$LAST_TAG" ]; then
+            RANGE="${LAST_TAG}..HEAD"
+          else
+            RANGE="HEAD"
+          fi
+
+          # Group by conventional commit type
+          echo "### 🚀 Features" >> CHANGELOG_BODY.md
+          git log ${RANGE} --oneline --grep="^feat" --format="- %s (%h)" >> CHANGELOG_BODY.md 2>/dev/null || true
+          echo "" >> CHANGELOG_BODY.md
+
+          echo "### 🐛 Bug Fixes" >> CHANGELOG_BODY.md
+          git log ${RANGE} --oneline --grep="^fix" --format="- %s (%h)" >> CHANGELOG_BODY.md 2>/dev/null || true
+          echo "" >> CHANGELOG_BODY.md
+
+          echo "### 🔒 Security" >> CHANGELOG_BODY.md
+          git log ${RANGE} --oneline --grep="^security" --format="- %s (%h)" >> CHANGELOG_BODY.md 2>/dev/null || true
+          echo "" >> CHANGELOG_BODY.md
+
+          echo "### 📚 Documentation" >> CHANGELOG_BODY.md
+          git log ${RANGE} --oneline --grep="^docs" --format="- %s (%h)" >> CHANGELOG_BODY.md 2>/dev/null || true
+          echo "" >> CHANGELOG_BODY.md
+
+          echo "### 🔧 Maintenance" >> CHANGELOG_BODY.md
+          git log ${RANGE} --oneline --grep="^chore\|^ci\|^refactor" --format="- %s (%h)" >> CHANGELOG_BODY.md 2>/dev/null || true
+          echo "" >> CHANGELOG_BODY.md
+
+          echo "---" >> CHANGELOG_BODY.md
+          echo "" >> CHANGELOG_BODY.md
+          echo "**Full Changelog**: https://github.com/${{ github.repository }}/compare/${LAST_TAG}...v${{ inputs.version }}" >> CHANGELOG_BODY.md
+
+      - name: Download artifacts
+        if: inputs.attach-artifacts
+        uses: actions/download-artifact@9bc31d5ccc31df68ecc42ccf4149144866c47d8a # v4.1.0
+        with:
+          path: release-assets/
+        continue-on-error: true
+
+      - name: Prepare release assets
+        if: inputs.attach-artifacts
+        run: |
+          mkdir -p release-files/
+          find release-assets/ -type f \( -name "*.sarif" -o -name "*.json" -o -name "*.tgz" -o -name "*.xml" \) | \
+            while read f; do
+              cp "$f" "release-files/$(basename "$f")"
+            done
+          ls -la release-files/ || true
+
+      - name: Create Git tag
+        run: |
+          TAG="v${{ inputs.version }}"
+          if [ -n "${{ inputs.service-name }}" ]; then
+            TAG="${{ inputs.service-name }}/v${{ inputs.version }}"
+          fi
+          git tag -a "${TAG}" -m "Release ${TAG}"
+          git push origin "${TAG}"
+          echo "TAG=${TAG}" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        id: create-release
+        uses: softprops/action-gh-release@de2c0eb89ae2a093876385947365aca7b0e5f844 # v1
+        with:
+          tag_name: ${{ env.TAG }}
+          name: "${{ inputs.service-name != '' && format('{0} ', inputs.service-name) || '' }}v${{ inputs.version }}"
+          body_path: ${{ inputs.generate-changelog && 'CHANGELOG_BODY.md' || '' }}
+          prerelease: ${{ inputs.prerelease }}
+          files: release-files/*
+          generate_release_notes: ${{ !inputs.generate-changelog }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        run: |
+          echo "## 🎉 Release Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Version** | \`${{ inputs.version }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Tag** | \`${{ env.TAG }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Pre-release** | ${{ inputs.prerelease && '✅' || '❌' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Release URL** | ${{ steps.create-release.outputs.html_url }} |" >> $GITHUB_STEP_SUMMARY

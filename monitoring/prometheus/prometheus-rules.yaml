@@ -1,0 +1,22 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: platform-recording-rules
+  namespace: monitoring
+  labels:
+    role: recording-rules
+spec:
+  groups:
+    - name: application.rules
+      rules:
+        # Calculate request rate averaged over 5m
+        - record: service:http_requests:rate5m
+          expr: sum(rate(http_requests_total[5m])) by (service, namespace)
+          
+        # Calculate error rate averaged over 5m
+        - record: service:http_requests_errors:rate5m
+          expr: sum(rate(http_requests_total{status=~"5.."}[5m])) by (service, namespace)
+
+        # Average container CPU usage per pod
+        - record: pod:container_cpu_usage:avg5m
+          expr: avg(rate(container_cpu_usage_seconds_total{container!="",container!="POD"}[5m])) by (namespace, pod)

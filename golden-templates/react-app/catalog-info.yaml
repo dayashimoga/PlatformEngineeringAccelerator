@@ -1,0 +1,27 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: react-app
+  description: "React Single Page Application packaged with Nginx"
+  annotations:
+    github.com/project-slug: YOUR_ORG/react-app
+    backstage.io/techdocs-ref: dir:.
+    argocd/app-name: react-app
+    grafana/dashboard-selector: "app=react-app"
+    prometheus.io/rule: react-app
+  tags:
+    - react
+    - frontend
+    - platform-accelerator
+  links:
+    - url: https://github.com/YOUR_ORG/react-app
+      title: GitHub Repository
+      icon: github
+    - url: https://grafana.internal/d/platform-app-dashboard?var-service=react-app
+      title: Grafana Dashboard
+      icon: dashboard
+spec:
+  type: website
+  lifecycle: production
+  owner: group:platform-engineering
+  system: platform

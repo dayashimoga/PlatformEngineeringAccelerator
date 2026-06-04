@@ -1,0 +1,217 @@
+# =============================================================================
+# ci-cd.yml — Main CI/CD Orchestrator
+# =============================================================================
+# Calls all 9 reusable workflows in sequence with proper dependency chaining.
+# This is the single entry point for the entire CI/CD pipeline.
+# =============================================================================
+
+name: "CI/CD Pipeline"
+
+on:
+  push:
+    branches: [main, release/*]
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options:
+          - dev
+          - qa
+          - uat
+          - prod
+        default: dev
+      service-name:
+        description: "Service name"
+        type: string
+        required: true
+      runtime:
+        description: "Application runtime"
+        type: choice
+        options:
+          - dotnet
+          - node
+          - python
+          - java
+          - go
+        default: dotnet
+      version:
+        description: "Release version (semver)"
+        type: string
+        required: false
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  REGISTRY: ghcr.io
+  SERVICE_NAME: ${{ inputs.service-name || github.event.repository.name }}
+  RUNTIME: ${{ inputs.runtime || 'dotnet' }}
+  ENVIRONMENT: ${{ inputs.environment || 'dev' }}
+
+permissions:
+  contents: write
+  packages: write
+  security-events: write
+  pull-requests: write
+  id-token: write
+
+jobs:
+  # ===========================================================================
+  # Stage 1: Validate
+  # ===========================================================================
+  validate:
+    name: "Stage 1 — Validate"
+    uses: ./.github/workflows/01-validate.yml
+    with:
+      runtime: ${{ inputs.runtime || 'dotnet' }}
+      helm-chart-path: "platform/kubernetes/helm"
+      terraform-directory: "platform/terraform"
+      kubernetes-manifests-path: "platform/kubernetes/base"
+      policy-directory: "security/policies"
+
+  # ===========================================================================
+  # Stage 2: Security (parallel with validate)
+  # ===========================================================================
+  security:
+    name: "Stage 2 — Security"
+    uses: ./.github/workflows/02-security.yml
+    with:
+      runtime: ${{ inputs.runtime || 'dotnet' }}
+      terraform-directory: "platform/terraform"
+      severity-threshold: "HIGH"
+      fail-on-critical: true
+
+  # ===========================================================================
+  # Stage 3: Build (after validate passes)
+  # ===========================================================================
+  build:
+    name: "Stage 3 — Build"
+    needs: [validate]
+    uses: ./.github/workflows/03-build.yml
+    with:
+      runtime: ${{ inputs.runtime || 'dotnet' }}
+
+  # ===========================================================================
+  # Stage 4: Test (after build)
+  # ===========================================================================
+  test:
+    name: "Stage 4 — Test"
+    needs: [build]
+    uses: ./.github/workflows/04-test.yml
+    with:
+      runtime: ${{ inputs.runtime || 'dotnet' }}
+      coverage-threshold: 80
+
+  # ===========================================================================
+  # Stage 5: Containerize (after test + security pass)
+  # ===========================================================================
+  containerize:
+    name: "Stage 5 — Containerize"
+    needs: [test, security]
+    if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+    uses: ./.github/workflows/05-containerize.yml
+    with:
+      registry: ghcr.io
+      image-name: "${{ github.repository_owner }}/${{ inputs.service-name || github.event.repository.name }}"
+      version: "${{ inputs.version || format('0.1.0-{0}', github.run_number) }}"
+      sign-image: true
+      scan-image: true
+      generate-sbom: true
+
+  # ===========================================================================
+  # Stage 6: Publish (after containerize)
+  # ===========================================================================
+  publish:
+    name: "Stage 6 — Publish"
+    needs: [containerize]
+    uses: ./.github/workflows/06-publish.yml
+    with:
+      registry: ghcr.io
+      image-name: "${{ github.repository_owner }}/${{ inputs.service-name || github.event.repository.name }}"
+      image-digest: ${{ needs.containerize.outputs.image-digest }}
+      version: "${{ inputs.version || format('0.1.0-{0}', github.run_number) }}"
+
+  # ===========================================================================
+  # Stage 7: GitOps Update (after publish)
+  # ===========================================================================
+  gitops-dev:
+    name: "Stage 7 — GitOps (Dev)"
+    needs: [publish]
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/07-gitops-update.yml
+    with:
+      environment: dev
+      image-uri: "${{ needs.containerize.outputs.image-uri }}"
+      image-tag: "${{ inputs.version || format('0.1.0-{0}', github.run_number) }}"
+      service-name: ${{ inputs.service-name || github.event.repository.name }}
+      auto-merge: true
+      create-pr: true
+
+  gitops-prod:
+    name: "Stage 7 — GitOps (Prod)"
+    needs: [publish]
+    if: startsWith(github.ref, 'refs/heads/release/')
+    uses: ./.github/workflows/07-gitops-update.yml
+    with:
+      environment: prod
+      image-uri: "${{ needs.containerize.outputs.image-uri }}"
+      image-tag: "${{ inputs.version || format('0.1.0-{0}', github.run_number) }}"
+      service-name: ${{ inputs.service-name || github.event.repository.name }}
+      auto-merge: false
+      create-pr: true
+
+  # ===========================================================================
+  # Stage 8: Release (on release branch push)
+  # ===========================================================================
+  release:
+    name: "Stage 8 — Release"
+    needs: [gitops-prod]
+    if: startsWith(github.ref, 'refs/heads/release/')
+    uses: ./.github/workflows/08-release.yml
+    with:
+      version: "${{ inputs.version || format('0.1.0-{0}', github.run_number) }}"
+      service-name: ${{ inputs.service-name || github.event.repository.name }}
+      generate-changelog: true
+      attach-artifacts: true
+
+  # ===========================================================================
+  # Stage 9: Backstage Sync (after GitOps update)
+  # ===========================================================================
+  backstage-sync:
+    name: "Stage 9 — Backstage Sync"
+    needs: [gitops-dev]
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/09-backstage-sync.yml
+    with:
+      service-name: ${{ inputs.service-name || github.event.repository.name }}
+      owner: "platform-engineering"
+      lifecycle: "production"
+
+  # ===========================================================================
+  # Pipeline Summary
+  # ===========================================================================
+  pipeline-summary:
+    name: "Pipeline Summary"
+    runs-on: ubuntu-latest
+    needs: [validate, security, build, test]
+    if: always()
+    steps:
+      - name: Pipeline summary
+        run: |
+          echo "## 🏭 CI/CD Pipeline Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Stage | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Validate | ${{ needs.validate.result == 'success' && '✅' || '❌' }} ${{ needs.validate.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Security | ${{ needs.security.result == 'success' && '✅' || '❌' }} ${{ needs.security.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Build | ${{ needs.build.result == 'success' && '✅' || '❌' }} ${{ needs.build.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | ${{ needs.test.result == 'success' && '✅' || '❌' }} ${{ needs.test.result }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Trigger**: \`${{ github.event_name }}\` on \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "**Commit**: \`${{ github.sha }}\`" >> $GITHUB_STEP_SUMMARY

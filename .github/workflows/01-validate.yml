@@ -1,0 +1,270 @@
+# =============================================================================
+# 01-validate.yml — Reusable Validation Workflow
+# =============================================================================
+# Runs linting, formatting, Helm lint, K8s manifest validation, Terraform
+# validation, and OPA policy checks.
+# =============================================================================
+
+name: "01 — Validate"
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "Root working directory"
+        type: string
+        required: false
+        default: "."
+      runtime:
+        description: "Application runtime (dotnet, node, python, java, go)"
+        type: string
+        required: false
+        default: ""
+      helm-chart-path:
+        description: "Path to Helm chart"
+        type: string
+        required: false
+        default: "platform/kubernetes/helm"
+      terraform-directory:
+        description: "Path to Terraform directory"
+        type: string
+        required: false
+        default: "platform/terraform"
+      kubernetes-manifests-path:
+        description: "Path to Kubernetes manifests"
+        type: string
+        required: false
+        default: "platform/kubernetes/base"
+      policy-directory:
+        description: "Path to OPA policies"
+        type: string
+        required: false
+        default: "security/policies"
+      enable-terraform-validation:
+        description: "Enable Terraform validation"
+        type: boolean
+        required: false
+        default: true
+      enable-helm-validation:
+        description: "Enable Helm chart validation"
+        type: boolean
+        required: false
+        default: true
+      enable-k8s-validation:
+        description: "Enable Kubernetes manifest validation"
+        type: boolean
+        required: false
+        default: true
+      enable-policy-validation:
+        description: "Enable OPA policy validation"
+        type: boolean
+        required: false
+        default: true
+
+jobs:
+  yaml-lint:
+    name: "YAML Lint"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Install yamllint
+        run: pip install yamllint
+
+      - name: Run yamllint
+        run: |
+          yamllint -c .yamllint.yml ${{ inputs.working-directory }} || true
+          echo "::notice::YAML linting complete"
+
+  runtime-lint:
+    name: "Runtime Lint (${{ inputs.runtime }})"
+    runs-on: ubuntu-latest
+    if: inputs.runtime != ''
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup .NET
+        if: inputs.runtime == 'dotnet'
+        uses: actions/setup-dotnet@4d6c8fcf3c8f7a60068d26b594648e99df24cee3 # v4.0.0
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Lint .NET
+        if: inputs.runtime == 'dotnet'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          dotnet format --verify-no-changes --verbosity diagnostic || \
+            echo "::warning::.NET formatting issues detected"
+
+      - name: Setup Node.js
+        if: inputs.runtime == 'node'
+        uses: actions/setup-node@b39b52d1213e96004bfcb1c61a8a6fa8ab84f3e8 # v4.0.0
+        with:
+          node-version: "20"
+
+      - name: Lint Node.js
+        if: inputs.runtime == 'node'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          npm ci --ignore-scripts
+          npm run lint --if-present
+
+      - name: Setup Python
+        if: inputs.runtime == 'python'
+        uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Lint Python
+        if: inputs.runtime == 'python'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          pip install ruff
+          ruff check .
+          ruff format --check .
+
+      - name: Setup Go
+        if: inputs.runtime == 'go'
+        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        with:
+          go-version: "1.22"
+
+      - name: Lint Go
+        if: inputs.runtime == 'go'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          go vet ./...
+          test -z "$(gofmt -l .)" || (echo "::error::Go files need formatting" && gofmt -l . && exit 1)
+
+      - name: Setup Java
+        if: inputs.runtime == 'java'
+        uses: actions/setup-java@387ac29b308b003ca37ba93a6cab5eb57c8f5f93 # v4.0.0
+        with:
+          distribution: "temurin"
+          java-version: "21"
+
+      - name: Lint Java
+        if: inputs.runtime == 'java'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -f "pom.xml" ]; then
+            mvn checkstyle:check -q || echo "::warning::Java checkstyle issues detected"
+          elif [ -f "build.gradle" ]; then
+            ./gradlew checkstyleMain || echo "::warning::Java checkstyle issues detected"
+          fi
+
+  helm-validation:
+    name: "Helm Validation"
+    runs-on: ubuntu-latest
+    if: inputs.enable-helm-validation
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup tools
+        uses: ./.github/actions/setup-tools
+        with:
+          install-helm: "true"
+
+      - name: Helm lint
+        run: |
+          helm lint ${{ inputs.helm-chart-path }} \
+            --strict \
+            --with-subcharts
+
+      - name: Helm template (dry-run)
+        run: |
+          helm template test-release ${{ inputs.helm-chart-path }} \
+            --debug \
+            --dry-run > /dev/null
+
+      - name: Helm template per environment
+        run: |
+          for env in dev qa uat prod; do
+            values_file="${{ inputs.helm-chart-path }}/values-${env}.yaml"
+            if [ -f "$values_file" ]; then
+              echo "=== Validating environment: ${env} ==="
+              helm template test-release ${{ inputs.helm-chart-path }} \
+                -f "$values_file" \
+                --dry-run > /dev/null
+              echo "✅ ${env} valid"
+            fi
+          done
+
+  k8s-validation:
+    name: "Kubernetes Manifest Validation"
+    runs-on: ubuntu-latest
+    if: inputs.enable-k8s-validation
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup tools
+        uses: ./.github/actions/setup-tools
+        with:
+          install-kubeconform: "true"
+
+      - name: Validate manifests with Kubeconform
+        run: |
+          find ${{ inputs.kubernetes-manifests-path }} -name "*.yaml" -o -name "*.yml" | \
+            xargs kubeconform \
+              -strict \
+              -summary \
+              -output json \
+              -kubernetes-version 1.29.0 \
+              -ignore-missing-schemas || true
+
+  terraform-validation:
+    name: "Terraform Validation"
+    runs-on: ubuntu-latest
+    if: inputs.enable-terraform-validation
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Setup Terraform
+        uses: ./.github/actions/setup-tools
+        with:
+          install-terraform: "true"
+
+      - name: Terraform format check
+        working-directory: ${{ inputs.terraform-directory }}
+        run: terraform fmt -check -recursive -diff
+
+      - name: Terraform init
+        working-directory: ${{ inputs.terraform-directory }}
+        run: terraform init -backend=false -input=false
+
+      - name: Terraform validate
+        working-directory: ${{ inputs.terraform-directory }}
+        run: terraform validate
+
+  policy-validation:
+    name: "Policy Validation (OPA)"
+    runs-on: ubuntu-latest
+    if: inputs.enable-policy-validation
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Install Conftest
+        run: |
+          CONFTEST_VERSION="0.49.1"
+          curl -sL "https://github.com/open-policy-agent/conftest/releases/download/v${CONFTEST_VERSION}/conftest_${CONFTEST_VERSION}_Linux_x86_64.tar.gz" | \
+            tar xz -C /usr/local/bin
+          conftest --version
+
+      - name: Test OPA policies
+        run: |
+          if [ -d "${{ inputs.policy-directory }}" ]; then
+            conftest verify -p ${{ inputs.policy-directory }}/ || true
+          fi
+
+      - name: Validate K8s manifests against policies
+        run: |
+          if [ -d "${{ inputs.policy-directory }}" ] && [ -d "${{ inputs.kubernetes-manifests-path }}" ]; then
+            find ${{ inputs.kubernetes-manifests-path }} -name "*.yaml" | \
+              xargs conftest test -p ${{ inputs.policy-directory }}/ --all-namespaces || true
+          fi

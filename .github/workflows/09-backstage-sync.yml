@@ -1,0 +1,162 @@
+# =============================================================================
+# 09-backstage-sync.yml — Reusable Backstage Sync Workflow
+# =============================================================================
+# Sync service catalog entries to Backstage, update component metadata.
+# =============================================================================
+
+name: "09 — Backstage Sync"
+
+on:
+  workflow_call:
+    inputs:
+      backstage-url:
+        description: "Backstage instance URL"
+        type: string
+        required: false
+        default: "https://backstage.internal"
+      catalog-info-path:
+        description: "Path to catalog-info.yaml"
+        type: string
+        required: false
+        default: "catalog-info.yaml"
+      service-name:
+        description: "Service name"
+        type: string
+        required: true
+      service-description:
+        description: "Service description"
+        type: string
+        required: false
+        default: ""
+      owner:
+        description: "Service owner (Backstage team)"
+        type: string
+        required: false
+        default: "platform-engineering"
+      lifecycle:
+        description: "Service lifecycle (experimental, production, deprecated)"
+        type: string
+        required: false
+        default: "production"
+      system:
+        description: "Backstage system this component belongs to"
+        type: string
+        required: false
+        default: "platform"
+    secrets:
+      BACKSTAGE_TOKEN:
+        required: false
+
+jobs:
+  sync-catalog:
+    name: "Sync Backstage Catalog"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Validate catalog-info.yaml
+        run: |
+          if [ ! -f "${{ inputs.catalog-info-path }}" ]; then
+            echo "::warning::catalog-info.yaml not found at ${{ inputs.catalog-info-path }}"
+            echo "Generating default catalog-info.yaml..."
+
+            cat > "${{ inputs.catalog-info-path }}" << 'CATALOG_EOF'
+          apiVersion: backstage.io/v1alpha1
+          kind: Component
+          metadata:
+            name: ${{ inputs.service-name }}
+            description: ${{ inputs.service-description || format('{0} service', inputs.service-name) }}
+            annotations:
+              github.com/project-slug: ${{ github.repository }}
+              backstage.io/techdocs-ref: dir:.
+              argocd/app-name: ${{ inputs.service-name }}
+              grafana/dashboard-selector: app=${{ inputs.service-name }}
+              prometheus.io/rule: ${{ inputs.service-name }}
+            tags:
+              - platform-accelerator
+            links:
+              - url: ${{ github.server_url }}/${{ github.repository }}
+                title: GitHub Repository
+                icon: github
+          spec:
+            type: service
+            lifecycle: ${{ inputs.lifecycle }}
+            owner: group:${{ inputs.owner }}
+            system: ${{ inputs.system }}
+            providesApis: []
+            consumesApis: []
+          CATALOG_EOF
+
+            echo "✅ Generated catalog-info.yaml"
+          fi
+
+      - name: Validate YAML structure
+        run: |
+          python3 -c "
+          import yaml, sys
+          with open('${{ inputs.catalog-info-path }}') as f:
+              docs = list(yaml.safe_load_all(f))
+              for doc in docs:
+                  assert doc.get('apiVersion'), 'Missing apiVersion'
+                  assert doc.get('kind'), 'Missing kind'
+                  assert doc.get('metadata', {}).get('name'), 'Missing metadata.name'
+              print(f'✅ Validated {len(docs)} catalog entities')
+          "
+
+      - name: Register/refresh entity in Backstage
+        if: secrets.BACKSTAGE_TOKEN != ''
+        run: |
+          CATALOG_URL="${{ inputs.backstage-url }}/api/catalog/locations"
+          ENTITY_URL="${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/${{ inputs.catalog-info-path }}"
+
+          echo "📡 Registering entity with Backstage..."
+          echo "   Catalog URL: ${CATALOG_URL}"
+          echo "   Entity URL: ${ENTITY_URL}"
+
+          # Register or refresh the location
+          HTTP_STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+            -X POST "${CATALOG_URL}" \
+            -H "Authorization: Bearer ${{ secrets.BACKSTAGE_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"type\": \"url\", \"target\": \"${ENTITY_URL}\"}")
+
+          if [ "$HTTP_STATUS" = "201" ] || [ "$HTTP_STATUS" = "200" ]; then
+            echo "✅ Entity registered/refreshed successfully"
+          elif [ "$HTTP_STATUS" = "409" ]; then
+            echo "ℹ️  Entity already registered, triggering refresh..."
+            curl -s -X POST \
+              "${{ inputs.backstage-url }}/api/catalog/refresh" \
+              -H "Authorization: Bearer ${{ secrets.BACKSTAGE_TOKEN }}" \
+              -H "Content-Type: application/json" \
+              -d "{\"entityRef\": \"component:default/${{ inputs.service-name }}\"}" || true
+          else
+            echo "::warning::Backstage API returned status ${HTTP_STATUS}"
+          fi
+
+      - name: Backstage sync without token
+        if: secrets.BACKSTAGE_TOKEN == ''
+        run: |
+          echo "ℹ️  No BACKSTAGE_TOKEN provided — skipping API registration"
+          echo "   The catalog-info.yaml at ${{ inputs.catalog-info-path }} is ready for manual import"
+          echo "   Import URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/${{ inputs.catalog-info-path }}"
+
+      - name: Commit catalog updates
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${{ inputs.catalog-info-path }}"
+          git diff --cached --quiet || \
+            git commit -m "chore(backstage): sync catalog-info for ${{ inputs.service-name }}" && \
+            git push || true
+
+      - name: Sync summary
+        run: |
+          echo "## 📋 Backstage Sync Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${{ inputs.service-name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Owner** | \`${{ inputs.owner }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Lifecycle** | \`${{ inputs.lifecycle }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Catalog File** | \`${{ inputs.catalog-info-path }}\` |" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,31 @@
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: dotnet-api
+  description: ".NET 8 API service with OpenTelemetry instrumentation"
+  annotations:
+    github.com/project-slug: YOUR_ORG/dotnet-api
+    backstage.io/techdocs-ref: dir:.
+    argocd/app-name: dotnet-api
+    grafana/dashboard-selector: "app=dotnet-api"
+    prometheus.io/rule: dotnet-api
+  tags:
+    - dotnet
+    - api
+    - platform-accelerator
+  links:
+    - url: https://github.com/YOUR_ORG/dotnet-api
+      title: GitHub Repository
+      icon: github
+    - url: https://grafana.internal/d/platform-app-dashboard?var-service=dotnet-api
+      title: Grafana Dashboard
+      icon: dashboard
+spec:
+  type: service
+  lifecycle: production
+  owner: group:platform-engineering
+  system: platform
+  providesApis:
+    - dotnet-api-api
+  dependsOn:
+    - resource:default/otel-collector

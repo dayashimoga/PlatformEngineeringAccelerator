@@ -1,0 +1,72 @@
+# ============================================================================
+# CODEOWNERS — Platform Engineering Accelerator
+# ============================================================================
+# Each line is a file pattern followed by one or more owners.
+# Order matters: later patterns override earlier ones.
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+# ============================================================================
+
+# ----------------------------------------------------------------------------
+# Default: Platform Engineering Team owns everything
+# ----------------------------------------------------------------------------
+*                                   @platform-engineering-team
+
+# ----------------------------------------------------------------------------
+# CI/CD Workflows
+# ----------------------------------------------------------------------------
+.github/                            @platform-engineering-team @devops-leads
+.github/workflows/                  @platform-engineering-team @devops-leads
+
+# ----------------------------------------------------------------------------
+# Infrastructure (Terraform)
+# ----------------------------------------------------------------------------
+platform/terraform/                 @infrastructure-team @platform-engineering-team
+platform/terraform/modules/security/ @security-team @infrastructure-team
+
+# ----------------------------------------------------------------------------
+# Kubernetes & Helm
+# ----------------------------------------------------------------------------
+platform/kubernetes/                @platform-engineering-team @devops-leads
+platform/kubernetes/helm/           @platform-engineering-team
+platform/kubernetes/overlays/prod/  @platform-engineering-team @devops-leads
+
+# ----------------------------------------------------------------------------
+# Argo CD
+# ----------------------------------------------------------------------------
+platform/argocd/                    @platform-engineering-team @devops-leads
+platform/argocd/applications/*prod* @platform-engineering-team @devops-leads @release-managers
+
+# ----------------------------------------------------------------------------
+# Security
+# ----------------------------------------------------------------------------
+security/                           @security-team @platform-engineering-team
+security/policies/                  @security-team
+
+# ----------------------------------------------------------------------------
+# Monitoring & Observability
+# ----------------------------------------------------------------------------
+monitoring/                         @sre-team @platform-engineering-team
+monitoring/alerts/                  @sre-team
+observability/                      @sre-team @platform-engineering-team
+
+# ----------------------------------------------------------------------------
+# Backstage
+# ----------------------------------------------------------------------------
+backstage/                          @platform-engineering-team @developer-experience-team
+
+# ----------------------------------------------------------------------------
+# Golden Templates
+# ----------------------------------------------------------------------------
+golden-templates/                   @platform-engineering-team
+
+# ----------------------------------------------------------------------------
+# Documentation
+# ----------------------------------------------------------------------------
+docs/                               @platform-engineering-team
+docs/runbooks/                      @sre-team
+
+# ----------------------------------------------------------------------------
+# Governance Files
+# ----------------------------------------------------------------------------
+CODEOWNERS                          @platform-engineering-team @devops-leads
+SECURITY.md                         @security-team

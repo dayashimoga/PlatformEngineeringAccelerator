@@ -1,0 +1,28 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: ${SERVICE_NAME}-${ENVIRONMENT}
+  namespace: argocd
+  labels:
+    app.kubernetes.io/managed-by: argocd
+    environment: ${ENVIRONMENT}
+spec:
+  project: platform
+  source:
+    repoURL: https://github.com/YOUR_ORG/platform-engineering-accelerator.git
+    targetRevision: HEAD
+    path: platform/kubernetes/helm
+    helm:
+      valueFiles:
+        - values-${ENVIRONMENT}.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ${NAMESPACE}
+  syncPolicy:
+    automated:
+      selfHeal: true
+      prune: true
+    syncOptions:
+      - CreateNamespace=true
+      - PruneLast=true
+      - ServerSideApply=true

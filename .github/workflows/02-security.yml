@@ -1,0 +1,264 @@
+# =============================================================================
+# 02-security.yml — Reusable Security Workflow
+# =============================================================================
+# CodeQL analysis, Trivy scanning, Checkov IaC scan, dependency scanning,
+# SBOM generation, and secret scanning validation.
+# =============================================================================
+
+name: "02 — Security"
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "Working directory for scanning"
+        type: string
+        required: false
+        default: "."
+      runtime:
+        description: "Application runtime for CodeQL language detection"
+        type: string
+        required: false
+        default: ""
+      terraform-directory:
+        description: "Terraform directory for IaC scanning"
+        type: string
+        required: false
+        default: "platform/terraform"
+      severity-threshold:
+        description: "Minimum severity to report"
+        type: string
+        required: false
+        default: "HIGH"
+      fail-on-critical:
+        description: "Fail the workflow on CRITICAL vulnerabilities"
+        type: boolean
+        required: false
+        default: true
+      enable-codeql:
+        description: "Enable CodeQL analysis"
+        type: boolean
+        required: false
+        default: true
+      enable-trivy:
+        description: "Enable Trivy scanning"
+        type: boolean
+        required: false
+        default: true
+      enable-checkov:
+        description: "Enable Checkov IaC scanning"
+        type: boolean
+        required: false
+        default: true
+      enable-grype:
+        description: "Enable Grype dependency scanning"
+        type: boolean
+        required: false
+        default: true
+      enable-sbom:
+        description: "Enable SBOM generation"
+        type: boolean
+        required: false
+        default: true
+
+permissions:
+  contents: read
+  security-events: write
+  actions: read
+
+jobs:
+  codeql-analysis:
+    name: "CodeQL Analysis"
+    runs-on: ubuntu-latest
+    if: inputs.enable-codeql && inputs.runtime != ''
+    permissions:
+      contents: read
+      security-events: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runtime: dotnet
+            language: csharp
+          - runtime: node
+            language: javascript-typescript
+          - runtime: python
+            language: python
+          - runtime: java
+            language: java-kotlin
+          - runtime: go
+            language: go
+    steps:
+      - name: Checkout
+        if: matrix.runtime == inputs.runtime
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Initialize CodeQL
+        if: matrix.runtime == inputs.runtime
+        uses: github/codeql-action/init@1b1aada464948af03b950897e5eb522f92603cc2 # v3.24.0
+        with:
+          languages: ${{ matrix.language }}
+          queries: security-extended,security-and-quality
+
+      - name: Autobuild
+        if: matrix.runtime == inputs.runtime
+        uses: github/codeql-action/autobuild@1b1aada464948af03b950897e5eb522f92603cc2 # v3.24.0
+
+      - name: Perform CodeQL Analysis
+        if: matrix.runtime == inputs.runtime
+        uses: github/codeql-action/analyze@1b1aada464948af03b950897e5eb522f92603cc2 # v3.24.0
+        with:
+          category: "/language:${{ matrix.language }}"
+
+  trivy-scan:
+    name: "Trivy Filesystem Scan"
+    runs-on: ubuntu-latest
+    if: inputs.enable-trivy
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: "fs"
+          scan-ref: ${{ inputs.working-directory }}
+          format: "sarif"
+          output: "trivy-fs-results.sarif"
+          severity: "${{ inputs.severity-threshold }},CRITICAL"
+          exit-code: ${{ inputs.fail-on-critical && '1' || '0' }}
+
+      - name: Run Trivy (table output for logs)
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: "fs"
+          scan-ref: ${{ inputs.working-directory }}
+          format: "table"
+          severity: "${{ inputs.severity-threshold }},CRITICAL"
+          exit-code: "0"
+
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@1b1aada464948af03b950897e5eb522f92603cc2 # v3.24.0
+        with:
+          sarif_file: trivy-fs-results.sarif
+        if: always()
+
+      - name: Upload Trivy report
+        uses: actions/upload-artifact@c7d193f32edcb7bfad88892161225aeda64e9392 # v4.0.0
+        with:
+          name: trivy-fs-report
+          path: trivy-fs-results.sarif
+          retention-days: 30
+        if: always()
+
+  checkov-scan:
+    name: "Checkov IaC Scan"
+    runs-on: ubuntu-latest
+    if: inputs.enable-checkov
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Run Checkov
+        uses: bridgecrewio/checkov-action@master
+        with:
+          directory: ${{ inputs.terraform-directory }}
+          framework: terraform
+          output_format: cli,sarif
+          output_file_path: console,checkov-results.sarif
+          soft_fail: true
+          download_external_modules: true
+
+      - name: Upload Checkov SARIF
+        uses: github/codeql-action/upload-sarif@1b1aada464948af03b950897e5eb522f92603cc2 # v3.24.0
+        with:
+          sarif_file: checkov-results.sarif
+        if: always()
+        continue-on-error: true
+
+      - name: Upload Checkov report
+        uses: actions/upload-artifact@c7d193f32edcb7bfad88892161225aeda64e9392 # v4.0.0
+        with:
+          name: checkov-report
+          path: checkov-results.sarif
+          retention-days: 30
+        if: always()
+
+  grype-scan:
+    name: "Grype Dependency Scan"
+    runs-on: ubuntu-latest
+    if: inputs.enable-grype
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Run Grype
+        uses: anchore/scan-action@3343887d815d7b07465f6fdcd395bd66571aff54 # v3.6.4
+        id: grype
+        with:
+          path: ${{ inputs.working-directory }}
+          fail-build: ${{ inputs.fail-on-critical }}
+          severity-cutoff: ${{ inputs.severity-threshold }}
+          output-format: sarif
+
+      - name: Upload Grype SARIF
+        uses: github/codeql-action/upload-sarif@1b1aada464948af03b950897e5eb522f92603cc2 # v3.24.0
+        with:
+          sarif_file: ${{ steps.grype.outputs.sarif }}
+        if: always()
+
+      - name: Upload Grype report
+        uses: actions/upload-artifact@c7d193f32edcb7bfad88892161225aeda64e9392 # v4.0.0
+        with:
+          name: grype-report
+          path: ${{ steps.grype.outputs.sarif }}
+          retention-days: 30
+        if: always()
+
+  sbom-generation:
+    name: "SBOM Generation"
+    runs-on: ubuntu-latest
+    if: inputs.enable-sbom
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      - name: Generate SBOM with Syft
+        uses: anchore/sbom-action@78fc58e266e87a38d4194b2137a3d4e9bcaf7ca1 # v0.17.0
+        with:
+          path: ${{ inputs.working-directory }}
+          format: spdx-json
+          output-file: sbom.spdx.json
+
+      - name: Generate CycloneDX SBOM
+        uses: anchore/sbom-action@78fc58e266e87a38d4194b2137a3d4e9bcaf7ca1 # v0.17.0
+        with:
+          path: ${{ inputs.working-directory }}
+          format: cyclonedx-json
+          output-file: sbom.cdx.json
+
+      - name: Upload SBOMs
+        uses: actions/upload-artifact@c7d193f32edcb7bfad88892161225aeda64e9392 # v4.0.0
+        with:
+          name: sbom-reports
+          path: |
+            sbom.spdx.json
+            sbom.cdx.json
+          retention-days: 90
+
+  security-summary:
+    name: "Security Summary"
+    runs-on: ubuntu-latest
+    needs: [trivy-scan, checkov-scan, grype-scan, sbom-generation]
+    if: always()
+    steps:
+      - name: Security scan summary
+        run: |
+          echo "## 🔒 Security Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Scanner | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|---------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Trivy | ${{ needs.trivy-scan.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Checkov | ${{ needs.checkov-scan.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Grype | ${{ needs.grype-scan.result == 'success' && '✅ Passed' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SBOM | ${{ needs.sbom-generation.result == 'success' && '✅ Generated' || '❌ Failed' }} |" >> $GITHUB_STEP_SUMMARY

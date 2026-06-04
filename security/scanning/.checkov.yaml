@@ -1,0 +1,11 @@
+compact: true
+directory:
+  - platform/terraform
+framework:
+  - terraform
+  - kubernetes
+soft-fail: false
+skip-check:
+  - CKV_AZURE_35  # Storage account network rules allowed for base template
+download-external-modules: true
+output: cli

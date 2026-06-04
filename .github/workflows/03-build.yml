@@ -1,0 +1,187 @@
+# =============================================================================
+# 03-build.yml — Reusable Build Workflow
+# =============================================================================
+# Matrix build supporting .NET, Node.js, Python, Java, and Go.
+# Caches dependencies per runtime, outputs build artifacts.
+# =============================================================================
+
+name: "03 — Build"
+
+on:
+  workflow_call:
+    inputs:
+      working-directory:
+        description: "Working directory containing source code"
+        type: string
+        required: false
+        default: "."
+      runtime:
+        description: "Application runtime (dotnet, node, python, java, go)"
+        type: string
+        required: true
+      dotnet-version:
+        description: ".NET SDK version"
+        type: string
+        required: false
+        default: "8.0.x"
+      node-version:
+        description: "Node.js version"
+        type: string
+        required: false
+        default: "20"
+      python-version:
+        description: "Python version"
+        type: string
+        required: false
+        default: "3.12"
+      java-version:
+        description: "Java version"
+        type: string
+        required: false
+        default: "21"
+      go-version:
+        description: "Go version"
+        type: string
+        required: false
+        default: "1.22"
+      build-configuration:
+        description: "Build configuration (Release, Debug)"
+        type: string
+        required: false
+        default: "Release"
+
+jobs:
+  build:
+    name: "Build (${{ inputs.runtime }})"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+
+      # -----------------------------------------------------------------------
+      # .NET Build
+      # -----------------------------------------------------------------------
+      - name: Setup .NET
+        if: inputs.runtime == 'dotnet'
+        uses: actions/setup-dotnet@4d6c8fcf3c8f7a60068d26b594648e99df24cee3 # v4.0.0
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
+
+      - name: Cache .NET packages
+        if: inputs.runtime == 'dotnet'
+        uses: actions/cache@13aabd235066c12964b80d6e4d9a0e5de4a7f659 # v4.0.0
+        with:
+          path: ~/.nuget/packages
+          key: ${{ runner.os }}-nuget-${{ hashFiles('**/*.csproj') }}
+          restore-keys: ${{ runner.os }}-nuget-
+
+      - name: Build .NET
+        if: inputs.runtime == 'dotnet'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          dotnet restore
+          dotnet build --configuration ${{ inputs.build-configuration }} --no-restore
+          dotnet publish --configuration ${{ inputs.build-configuration }} --no-build --output ./publish
+
+      # -----------------------------------------------------------------------
+      # Node.js Build
+      # -----------------------------------------------------------------------
+      - name: Setup Node.js
+        if: inputs.runtime == 'node'
+        uses: actions/setup-node@b39b52d1213e96004bfcb1c61a8a6fa8ab84f3e8 # v4.0.0
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: "npm"
+          cache-dependency-path: "${{ inputs.working-directory }}/package-lock.json"
+
+      - name: Build Node.js
+        if: inputs.runtime == 'node'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          npm ci --ignore-scripts
+          npm run build --if-present
+
+      # -----------------------------------------------------------------------
+      # Python Build
+      # -----------------------------------------------------------------------
+      - name: Setup Python
+        if: inputs.runtime == 'python'
+        uses: actions/setup-python@0a5c61591373683505ea898e09a3ea4f39ef2b9c # v5.0.0
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Cache Python packages
+        if: inputs.runtime == 'python'
+        uses: actions/cache@13aabd235066c12964b80d6e4d9a0e5de4a7f659 # v4.0.0
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements*.txt') }}
+          restore-keys: ${{ runner.os }}-pip-
+
+      - name: Build Python
+        if: inputs.runtime == 'python'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          python -m pip install --upgrade pip setuptools wheel
+          pip install -r requirements.txt
+          python -m py_compile src/main.py
+
+      # -----------------------------------------------------------------------
+      # Java Build
+      # -----------------------------------------------------------------------
+      - name: Setup Java
+        if: inputs.runtime == 'java'
+        uses: actions/setup-java@387ac29b308b003ca37ba93a6cab5eb57c8f5f93 # v4.0.0
+        with:
+          distribution: "temurin"
+          java-version: ${{ inputs.java-version }}
+
+      - name: Cache Maven packages
+        if: inputs.runtime == 'java'
+        uses: actions/cache@13aabd235066c12964b80d6e4d9a0e5de4a7f659 # v4.0.0
+        with:
+          path: ~/.m2/repository
+          key: ${{ runner.os }}-maven-${{ hashFiles('**/pom.xml') }}
+          restore-keys: ${{ runner.os }}-maven-
+
+      - name: Build Java
+        if: inputs.runtime == 'java'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          if [ -f "pom.xml" ]; then
+            mvn clean package -DskipTests -B
+          elif [ -f "build.gradle" ]; then
+            ./gradlew build -x test
+          fi
+
+      # -----------------------------------------------------------------------
+      # Go Build
+      # -----------------------------------------------------------------------
+      - name: Setup Go
+        if: inputs.runtime == 'go'
+        uses: actions/setup-go@0c52d547c9bc32b1aa3301fd7a9cb496313a4491 # v5.0.0
+        with:
+          go-version: ${{ inputs.go-version }}
+
+      - name: Build Go
+        if: inputs.runtime == 'go'
+        working-directory: ${{ inputs.working-directory }}
+        run: |
+          go mod download
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o ./bin/app ./...
+
+      # -----------------------------------------------------------------------
+      # Upload build artifacts
+      # -----------------------------------------------------------------------
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@c7d193f32edcb7bfad88892161225aeda64e9392 # v4.0.0
+        with:
+          name: build-artifacts-${{ inputs.runtime }}
+          path: |
+            ${{ inputs.working-directory }}/publish/
+            ${{ inputs.working-directory }}/dist/
+            ${{ inputs.working-directory }}/build/
+            ${{ inputs.working-directory }}/bin/
+            ${{ inputs.working-directory }}/target/*.jar
+          retention-days: 7
+          if-no-files-found: ignore

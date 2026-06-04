@@ -1,0 +1,8 @@
+fail-on-severity: high
+ignore:
+  # Add specific vulnerability exclusions if needed
+  - vulnerability: CVE-2023-XXXX
+    reason: "Mitigated by runtime environment configuration"
+db:
+  auto-update: true
+  cache-dir: ~/.grype/db

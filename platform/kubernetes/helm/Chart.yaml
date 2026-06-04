@@ -1,0 +1,13 @@
+apiVersion: v2
+name: platform-service
+description: A Helm chart for platform-managed Kubernetes services
+type: application
+version: 1.0.0
+appVersion: "1.0.0"
+maintainers:
+  - name: Platform Engineering Team
+    email: platform-team@your-org.com
+keywords:
+  - platform
+  - accelerator
+  - kubernetes

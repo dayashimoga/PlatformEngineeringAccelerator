@@ -1,0 +1,213 @@
+# =============================================================================
+# 07-gitops-update.yml — Reusable GitOps Update Workflow
+# =============================================================================
+# Update Helm values or Kustomize overlays with new image tags.
+# Commit to GitOps branch/repo. Auto-merge for non-prod environments.
+# =============================================================================
+
+name: "07 — GitOps Update"
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        description: "Target environment (dev, qa, uat, prod)"
+        type: string
+        required: true
+      image-uri:
+        description: "Full image URI with tag"
+        type: string
+        required: true
+      image-tag:
+        description: "Image tag/version"
+        type: string
+        required: true
+      service-name:
+        description: "Service name"
+        type: string
+        required: true
+      gitops-repo:
+        description: "GitOps repository (empty = same repo)"
+        type: string
+        required: false
+        default: ""
+      gitops-branch:
+        description: "GitOps branch"
+        type: string
+        required: false
+        default: "main"
+      helm-values-path:
+        description: "Path to Helm values file"
+        type: string
+        required: false
+        default: ""
+      kustomize-overlay-path:
+        description: "Path to Kustomize overlay"
+        type: string
+        required: false
+        default: ""
+      auto-merge:
+        description: "Auto-merge the GitOps PR (non-prod only)"
+        type: boolean
+        required: false
+        default: false
+      create-pr:
+        description: "Create a PR instead of direct commit"
+        type: boolean
+        required: false
+        default: true
+    secrets:
+      GIT_TOKEN:
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  update-gitops:
+    name: "Update GitOps (${{ inputs.environment }})"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout GitOps repository
+        uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+        with:
+          repository: ${{ inputs.gitops-repo || github.repository }}
+          ref: ${{ inputs.gitops-branch }}
+          token: ${{ secrets.GIT_TOKEN || secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Configure Git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Determine values file path
+        id: paths
+        run: |
+          if [ -n "${{ inputs.helm-values-path }}" ]; then
+            echo "values-path=${{ inputs.helm-values-path }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "values-path=platform/kubernetes/helm/values-${{ inputs.environment }}.yaml" >> "$GITHUB_OUTPUT"
+          fi
+
+          if [ -n "${{ inputs.kustomize-overlay-path }}" ]; then
+            echo "kustomize-path=${{ inputs.kustomize-overlay-path }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "kustomize-path=platform/kubernetes/overlays/${{ inputs.environment }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update Helm values
+        run: |
+          VALUES_FILE="${{ steps.paths.outputs.values-path }}"
+          if [ -f "$VALUES_FILE" ]; then
+            echo "📝 Updating Helm values: ${VALUES_FILE}"
+
+            # Update image tag using yq
+            curl -sL https://github.com/mikefarah/yq/releases/latest/download/yq_linux_amd64 -o /usr/local/bin/yq && chmod +x /usr/local/bin/yq
+
+            yq eval ".image.tag = \"${{ inputs.image-tag }}\"" -i "${VALUES_FILE}"
+            yq eval ".image.repository = \"${{ inputs.image-uri }}\"" -i "${VALUES_FILE}" || true
+
+            echo "✅ Helm values updated"
+            cat "${VALUES_FILE}"
+          else
+            echo "::warning::Helm values file not found: ${VALUES_FILE}"
+          fi
+
+      - name: Update Kustomize overlay
+        run: |
+          KUSTOMIZE_DIR="${{ steps.paths.outputs.kustomize-path }}"
+          if [ -d "$KUSTOMIZE_DIR" ]; then
+            echo "📝 Updating Kustomize overlay: ${KUSTOMIZE_DIR}"
+
+            cd "${KUSTOMIZE_DIR}"
+            if command -v kustomize &>/dev/null; then
+              kustomize edit set image "*=${{ inputs.image-uri }}"
+            else
+              # Fallback: update kustomization.yaml directly
+              if [ -f "kustomization.yaml" ]; then
+                yq eval ".images[0].newTag = \"${{ inputs.image-tag }}\"" -i kustomization.yaml
+              fi
+            fi
+
+            echo "✅ Kustomize overlay updated"
+          fi
+
+      - name: Create GitOps branch
+        id: branch
+        run: |
+          BRANCH_NAME="gitops/${{ inputs.service-name }}/${{ inputs.environment }}/${{ inputs.image-tag }}"
+          echo "branch-name=${BRANCH_NAME}" >> "$GITHUB_OUTPUT"
+
+          git checkout -b "${BRANCH_NAME}" || git checkout "${BRANCH_NAME}"
+
+      - name: Commit changes
+        run: |
+          git add -A
+          git diff --cached --quiet && echo "No changes to commit" && exit 0
+
+          git commit -m "chore(gitops): update ${{ inputs.service-name }} to ${{ inputs.image-tag }} in ${{ inputs.environment }}
+
+          Service: ${{ inputs.service-name }}
+          Environment: ${{ inputs.environment }}
+          Image: ${{ inputs.image-uri }}
+          Tag: ${{ inputs.image-tag }}
+          Triggered by: ${{ github.event_name }}
+          Workflow: ${{ github.workflow }}
+          Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          git push origin "${{ steps.branch.outputs.branch-name }}" --force
+
+      - name: Create Pull Request
+        if: inputs.create-pr
+        uses: peter-evans/create-pull-request@153407881ec5c12d95e0e66e5d4f5d5e45e9efa9 # v6.0.0
+        id: create-pr
+        with:
+          token: ${{ secrets.GIT_TOKEN || secrets.GITHUB_TOKEN }}
+          branch: ${{ steps.branch.outputs.branch-name }}
+          base: ${{ inputs.gitops-branch }}
+          title: "🚀 Deploy ${{ inputs.service-name }} v${{ inputs.image-tag }} to ${{ inputs.environment }}"
+          body: |
+            ## GitOps Deployment
+
+            | Property | Value |
+            |----------|-------|
+            | **Service** | `${{ inputs.service-name }}` |
+            | **Environment** | `${{ inputs.environment }}` |
+            | **Image** | `${{ inputs.image-uri }}` |
+            | **Tag** | `${{ inputs.image-tag }}` |
+
+            ### Changes
+            - Updated image tag in Helm values / Kustomize overlay
+            - Argo CD will auto-sync on merge
+
+            ### Triggered by
+            - Workflow: `${{ github.workflow }}`
+            - Run: [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})
+          labels: |
+            gitops
+            deployment
+            ${{ inputs.environment }}
+          assignees: ${{ github.actor }}
+
+      - name: Auto-merge (non-prod)
+        if: inputs.auto-merge && inputs.environment != 'prod' && steps.create-pr.outputs.pull-request-number != ''
+        run: |
+          gh pr merge ${{ steps.create-pr.outputs.pull-request-number }} \
+            --auto --squash \
+            --subject "🚀 Deploy ${{ inputs.service-name }} v${{ inputs.image-tag }} to ${{ inputs.environment }}"
+        env:
+          GH_TOKEN: ${{ secrets.GIT_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: GitOps summary
+        run: |
+          echo "## 🔄 GitOps Update Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | \`${{ inputs.service-name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | \`${{ inputs.environment }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Tag** | \`${{ inputs.image-tag }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Branch** | \`${{ steps.branch.outputs.branch-name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Auto-merge** | ${{ inputs.auto-merge && '✅ Enabled' || '❌ Disabled' }} |" >> $GITHUB_STEP_SUMMARY
